@@ -1,0 +1,389 @@
+---
+title: "Assignment 5"
+author: "Cameron Brown"
+date: "17/12/2021"
+
+output: pdf_document
+---
+```{r, echo = F}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+#Before my text was running off the pdf page
+#adapted from https://github.com/rstudio/rmarkdown/issues/646
+```
+
+## github:"https://github.com/Cam-B33/Assignment-5"
+
+# Introduction
+  Charles Darwin is widely recognized in common knowledge as the discoverer of Natural Selection, a fundamental concept of modern Biology. On Darwin’s initial publication that introduced the idea of natural selection, he had a co-author named Alfred Russel Wallace. Alfred Russel Wallace was a British Naturalist who made significant contributions to Biology and is sometimes called the “Father of Biogeography.” He made many of the same observations that Darwin made during his time in the Galapagos Islands of off South America. Except Wallace did his fieldwork thousands of Kilometers away in Indonesia. Fundamental to his research was discovering a geographical feature now called the Wallace line. He found that this line, which separates Indonesia into two distinct halves, is a significant boundary for the biogeography of the area. He found that the overwhelming number of flora and fauna in the region abided by this line, with species rarely crossing it, despite the only barrier being a small expanse of water about 35km in width (Oosterzee 1997).  
+
+ 
+
+  For my assignment, I want to determine if modern biogeographical techniques agree with the observations made by Wallace. The advent of metabarcoding and other genetic analyses has disrupted how species are classified (Haung et al. 2016; Yahr et al. 2016). Once limited to only using morphological analysis, many past observations about species have been updated as genetic research reveals more accurate lineages that sometimes disagree with morphological observations. To “kick the tires” on Wallace’s observation, I want to do an investigation into the Biogeography of bats in the region. *Pteropodidae*, also known as the Megabats, are a family of bats in Southeast Asia, Africa and the Indian Ocean (Almeida et al. 2011). My goal is to determine if the species in the Megabat family abide by the geographic boundary of the Wallace line. To do this, I will obtain sequence and location data for the Family *Pteropodidae* and reconstruct the phylogeny to examine the Biogeography and evolutionary dispersion of this species. 
+
+
+## Load Required Packages
+
+```{r}
+
+
+#install.packages("phangorn")
+library(phangorn)
+#install.packages("rentrez")
+library(rentrez)
+#install.packages("seqinr")
+library(seqinr)
+#install.packages("Biostrings")
+library(Biostrings)
+#install.packages("tidyverse")
+library(tidyverse)
+#install.packages("ape")
+library(ape)
+#install.packages("tidyverse")
+library(tidyverse)
+#install.packages("stringi")
+library(stringi)
+#install.packages("RSQLite")
+library(RSQLite)
+#install.packages("dplyr")
+library(dplyr)
+#install.packages(stringr)
+library(stringr)
+#install.packages("BiocManager")
+library(BiocManager)
+#BiocManager::install(c("Biostrings", "muscle", "msa", "DECIPHER"))
+library(Biostrings)
+library(muscle)
+library(DECIPHER)
+#install.packages("phytools")
+library(phytools)
+#install.packages("mapdata")
+library(mapdata)
+#install.packages("viridis")
+library(viridis)
+#install.packages("maps")
+library(maps)
+
+source("Entrez_Functions.R")
+```
+
+# Dataset description
+
+I have two data sets I used for my project, one contains sequence data for the Family *Pteropodidae*, and the other contains location data. I accessed the sequence data via the public database nuccore via NCBI. I obtained the sequence data using the Entrez package in R, and I downloaded it on Wednesday, December 8th, 2021. In total, there are 1167 entries, of which I will be using the Species Name and Sequence variables for my analysis. The location data for the Family *Pteropodidae* was obtained from the public database GBIF using their interface and then imported into my R workspace. Data were downloaded on December 14th and contained 143,584 entries. The variables from this data set that I will be using for my analysis are Lat, Long and Species Name. 
+
+
+
+# Data Acquisition, Exploration, Filtering, and Quality Control
+```{r}
+#If data not already collected, un comment the code below to fetch the sequence data from the NCBI database nuccore and write a series of FASTA files. 
+
+#Pteropodidae_Search <- entrez_search (db = "nuccore", term = "(Pteropodidae[ORGN] AND CytB[Gene] AND 600:1000[SLEN])",use_history = T)
+#Pteropodida_Search$count
+#Pteropodidae_Search$web_history #Storing call on server
+#FetchFastaFiles(searchTerm = "Pteropodidae[ORGN] AND CytB[Gene] AND 600:1000[SLEN]", seqsPerFile = 100, fastaFileName = "Pteropodidae_cytb")
+
+#If the FASTA files are already written, use the below code to combine them into a data frame. 
+
+dfPteropodidae_Cytb <- MergeFastaFiles(filePattern = "Pteropodidae_cytb*")
+```
+
+```{r}
+hist(nchar(dfPteropodidae_Cytb$Sequence),
+main="Distribution of Pteropodidae CytB Sequence Length",
+xlab="CytB Sequence Length ",
+col="darkorchid2",
+xlim=c(600,1000),
+freq=TRUE
+)
+```
+Figure 1: Histogram of *Pteropodidae* CytB Sequence Length
+```{r}
+#Set values for missing data proportion and length variability to be used as cuttoffs to filter the sequence data. 
+
+missing.data <- 0.01
+
+length.var <- 50
+
+#Continuing to filter the Sequence data, removing NA's, applying missing data and length variability thresholds, removing Gaps and N's from the beginning and end of the sequence. 
+
+dffiltered_cytb <- dfPteropodidae_Cytb %>%
+  filter(!is.na(Sequence)) %>%
+  mutate(Sequence2 = str_remove_all(Sequence, "^N+|N+$|-")) %>%
+  filter(str_count(Sequence2, "N") <= (missing.data * str_count(Sequence2))) %>%
+  filter(str_count(Sequence2) >= median(str_count(Sequence2)) - length.var & str_count(Sequence2) <= median(str_count(Sequence2)) + length.var)
+
+
+#I have a lot of sequences so I'm going the further refine my data set by removing sequences from the outer 50% of the length distribution.
+
+q1 <- quantile(nchar(dffiltered_cytb$Sequence2), probs = 0.25, na.rm = TRUE)
+q1
+
+q3 <- quantile(nchar(dffiltered_cytb$Sequence2), probs = 0.75, na.rm = TRUE)
+q3
+
+
+dfPteropodidae <- dffiltered_cytb %>%
+  filter(((str_count(Sequence2) >= q1 & str_count(Sequence2) <= q3))) 
+
+#Parsing out Species and Genus Name from the title and making into unique columns. 
+
+#Acknowledgment: I figured out how to do this from Chor while collaborating on assignment 3 
+
+dfPteropodidae$Species_Name <- word(dfPteropodidae$Title, 2L, 3L)
+
+dfPteropodidae$Genus_Name <- word(dfPteropodidae$Title, 2L)
+
+#Sanity Check 
+#names(dfPteropodidae)
+#dim(dfPteropodidae)
+#summary(dfPteropodidae)
+
+#For the phylogenetic tree I will later create I only want 2 sequences per species.
+set.seed(5)
+dfSequenceSet <- dfPteropodidae %>%
+  group_by(Species_Name) %>% 
+  sample_n(2)
+
+#summary(dfSequenceSet)
+
+species <- unique(dfSequenceSet$Species_Name)
+print(species)
+
+#Phylogenetic trees don't like duplicate names so I'm giving each row a unique name while still preserving the species name. 
+
+
+```
+# Loading GBIF data 
+```{r}
+dflocation_data <-read.csv("Mega_bat_data.csv")
+ 
+#names(dflocation_data)
+#dim(dflocation_data)
+#summary(dflocation_data)
+
+#GBIF Reference: GBIF.org (14 December 2021) GBIF Occurrence Download https://doi.org/10.15468/dl.udwvmp
+
+#Parsing out latitude, longitude and species name form the Mega_bat columns
+
+dflocation_data$Lat <- word(dflocation_data$X.1, 6L,sep = fixed("\t") )
+dflocation_data$Long <- word(dflocation_data$X.1, 7L,sep = fixed("\t") )
+dflocation_data$Species_Name <- word(dflocation_data$X, 2L,sep = fixed("\t") )
+
+#View(dflocation_data)
+#names(dflocation_data)
+#dim(dflocation_data)
+#summary(dflocation_data)
+
+#First time I tried remove the NA's from the Lat, Long columns I got lots of character data in with my coordinates, so I found the below solution on Stackoverflow
+#code solution from https://stackoverflow.com/questions/25237373/r-filtering-out-non-numerical-values-in-dataframe
+
+dflocation_data$Lat <- as.numeric(as.character(dflocation_data$Lat))
+dflocation_data$Long <- as.numeric(as.character(dflocation_data$Long))
+
+#View(dflocation_data)
+
+#Removing NA's from Lat, Long and Species Names and subsetting just those columns from the data frame. 
+dflocation_data <- dflocation_data %>%
+  filter(!is.na(Lat)) %>%
+  filter(!is.na(Long)) %>%
+  filter(!is.na(Species_Name)) 
+dflocation_data <- dflocation_data[,c(32,33,34)]
+
+#View(dflocation_data)
+#sum(is.na(dflocation_data$Lat))
+#sum(is.na(dflocation_data$Long))
+#sum(is.na(dflocation_data$Species_Name))
+
+#Filtering for only species that also have sequence data, and then mathing the sequence data by collecting 2 locations per species. 
+set.seed(19)
+dflocation_data <-dflocation_data[dflocation_data$Species_Name%in%species,]
+unique(dflocation_data$Species_Name)
+dflocation_data <- dflocation_data %>%
+  group_by(Species_Name) %>% 
+  sample_n(2)
+
+#Creating unique rownames to match the sequence rownames
+
+rownames(dflocation_data) <- make.unique(dflocation_data$Species_Name)
+rownames(dflocation_data)
+#I have less species in my location dataset then in my sequence data set, So I'm now selecting for species only present in both datasets.
+
+Species_Occ <- dflocation_data$Species_Name
+
+dfSequenceSet <-dfSequenceSet[dfSequenceSet$Species_Name%in%Species_Occ,]
+
+```
+
+
+
+# Phytools description
+
+The primary software tool I used to analyze the biogeography of the Megabats *Pteropodidae*, which provides a variety of tools for phylogenetic analysis. The package's author and maintainer are Liam J. Revell. I selected this tool because it was the only tool that I could find allowed you to visualize a phylogenetic tree onto a map, which was an essential visualization for answering my research question. The phylogenetic trees were constructed directly from a text string or Newick file in the vignettes for phylotools. To build upon the existing vignette by using functions from the package muscle to align my sequences and then using the ape functions dist.DNA and NJ to create a distance matrix for my sequences and then use the neighbour-joining method to create a tree; in short, I took a more rigorous approach to tree construction then presented in the vignettes.
+## vignette
+http://phytools.org/Cordoba2017/ex/15/Plotting-methods.html
+
+## Phytools reference
+Revell LJ (2012). “phytools: An R package for phylogenetic comparative biology (and other things).” Methods in Ecology and Evolution, 3, 217-223.
+
+# Main Analysis
+```{r}
+
+#Code adapted from SOFTWARE TOOLS CLASS 11 - DNA SEQUENCE ALIGNMENT V2
+
+#check class of dfSequenceSet
+class(dfSequenceSet)
+#Convert to data frame so it it compatable with following functions
+dfSequenceSet <- as.data.frame(dfSequenceSet)
+
+#Convert Sequence2 column to DNAStringSet format for analysis with Bioconductor package
+dfSequenceSet$Sequence2 <- DNAStringSet(dfSequenceSet$Sequence2)
+class (dfSequenceSet$Sequence2)
+class (dfSequenceSet)
+
+#Un comment below to view sequences in Browser
+#BrowseSeqs(dfSequenceSet1$Sequence2)
+
+#Align sequences using muscle package 
+dfSequence.alignment <- DNAStringSet(muscle::muscle(dfSequenceSet$Sequence2, maxiters = 2), use.names = TRUE)
+
+
+#Un comment below to view aligned sequences in browser
+#BrowseSeqs(dfSequence.alignment)
+
+#Below code adapted from "SOFTWARE TOOLS CLASS 13 - EXAMPLE CODE - ACTIVITY PART 2"
+
+#Select a Model of DNA evolution and a threshold 
+
+chosen.model <- "TN93"
+
+clustering.threshold <- 0.03
+
+#Define clustering method
+clustering.method <- "single"
+#Turn aligned sequences into object of class DNAbin
+dnaBin.CytB <- as.DNAbin(dfSequence.alignment)
+class(dnaBin.CytB)
+
+#Create a distance matrix using our aligned sequences and the TN93 model of DNA evolution
+
+distanceMatrix.TN93 <- dist.dna(dnaBin.CytB, model = "TN93", as.matrix = TRUE, pairwise.deletion = TRUE)
+
+#Add rownames which ID species to the distance matrix, will be important when I create the tree. 
+rownames(dfSequenceSet) <- make.unique(dfSequenceSet$Species_Name)
+rownames(dfSequenceSet)
+rownames(distanceMatrix.TN93) <- rownames(dfSequenceSet)
+rownames(distanceMatrix.TN93)
+#Un comment to explore data further
+#class(distanceMatrix.TN93)
+#hist(distanceMatrix.TN93)
+#range(distanceMatrix.TN93)
+```
+
+
+```{r Dendogram, echo=TRUE}
+#Reclustering using the distance matrix creates a dendogram. 
+clusters.CytB.TN93 <- IdClusters(distanceMatrix.TN93,
+                                 method = clustering.method,
+                                 cutoff = clustering.threshold,
+                                 showPlot = TRUE,
+                                 type = "both",
+                                 verbose = TRUE)
+
+```
+
+Figure 2. Dendogram of *Pteropodidae* Sequences 
+
+
+```{r}
+#class(clusters.CytB.TN93)
+#Use function NJ (from ape) to create a phylogenetic tree form the distance matrix using the neigbor joining method. 
+Megabat_Tree <- nj(distanceMatrix.TN93)
+class(Megabat_Tree)
+ 
+#Check Tree tip lables 
+Megabat_Tree$tip.label
+
+
+#Turn coordinate data into a matrix and set rownames to match the tip lables. 
+Coordinates <- as.matrix(dflocation_data[,c(1,2)], nrow = 20)
+rownames(Coordinates) <- rownames(distanceMatrix.TN93)
+Coordinates
+rownames(dflocation_data)
+
+#Check that the coordinate row names equal the phylogenetic tree tip labels
+all.equal(rownames(Coordinates), Megabat_Tree$tip.label)
+
+
+  
+##Schliep K.P. 2011. phangorn: phylogenetic analysis in R. Bioinformatics, 27(4) 592-593
+## Code adapted form SUPPLEMENTARY SCRIPT - MINIMAL REPRODUCIBLE EXAMPLE, GEOPHYLOGENY, VIRIDIS
+
+#Force ultrameric on my tree
+MegaBat_Ultra <- phytools::force.ultrametric(Megabat_Tree)
+
+#Check if tree is rooted
+ape::is.rooted(MegaBat_Ultra)
+
+#Root tree
+phytools::midpoint.root(MegaBat_Ultra)
+
+#Check that tree is bifurcating
+ape::is.binary(MegaBat_Ultra)
+
+
+```
+
+```{r}
+#Build Geophylogeny 
+
+obj <- phytools::phylo.to.map(tree = MegaBat_Ultra, coords = Coordinates, rotate = TRUE, type = "direct", fsize = 0.7, plot = FALSE)
+
+
+
+plot(obj, type = "direct", ftype="i",fsize=0.7,cex.points=c(0.7,1.2))
+```
+Figure 3. Geophylogeny of Family *Pteropodidae*
+
+It should be noted that type = "phylogram" yeilds a much clearer geophylogeny however I kept running into the error code "Error in xy.coords(x, y) : 'x' and 'y' lengths differ"
+After checking the developers GitHub I found that this is quite a common error when using phylo.to.map https://github.com/liamrevell/phytools/issues/42
+ I tried several of the solutions suggested, including reducing font size, cropping map output, changing tip label to single character, rooting the phylogeny, making sure its fully bifurcating, and reducing branch length.
+None of these worked. One hypothesis I have is that my laptop screen is fairly small and a small plotting device was discussed as one of the main causes of this error code. If you have a large monitor you could try changing type to "phylogram" to see if it works with the bigger screen. Related to this, most of the maps that couldn't resolve this error code had a large (multi continent) geographic range.The maps that had all the data within a single region/continent appeared to run into this issue less. 
+
+
+
+#Conclusion 
+Based on my final visualization, I can see that the Megabats violate the Wallace Line hypothesis (Central Indonesia). This conclusion is backed up by past research as it has shown that Bats are one of the few animal groups to violate the Wallace Line hypothesis (Corbet and Hill. 1992), which I knew before starting my analysis. I do find it very interesting that the farthest outgroup species of Megabat, *Macroglossus minimus*, are the species that is the farthest over the Wallace line. The closer to the Wallace Line the species is, the more distant the genetic distance between species. Some initial conclusions I draw from the analyses are that while the Megabats violate the Wallace line hypothesis, this geographical feature still appears to have influenced the early speciation of this Family. This conclusion is further supported by research into the evolution of Bat species in the region (Tsang et al. 2020)
+
+There are a few caveats to my study that I should address. The first is the potential discrepancy between species location and sequence data. Many of the species occurrence records in GBIF are from morphological analyses, so I am relying on the correct identification of the specimen to link it to the appropriate species accurately. Since I didn't filter based on the species identification method, my occurrence data could come from morphological identification, which potentially impacts the statement I made in the introduction about using genetic analyses to update observations initially made on morphological observation. I did not filter for fossils present in the record, which depending on how old the fossil is, could dramatically impact the geophylogeny if the fossil was recovered from a location in which that species is no longer endemic.
+
+In future analyses, I would filter the species location data for both identification methods (Genetic vs. morphological) and whether the specimen is a fossil or not. I would exclude the megabat species endemic to Africa and obtain more sequences and occurrence data for the species present in Southeast Asia, which will help to reduce the noise in my data set and allow me to better focus on my region of interest. The increased occurrence data would better help me analyze my observation about the Wallace line potentially contributing to early speciation within this taxonomic group. My analyses could also be further strengthened by testing multiple models of DNA evolution, using the phangorn package, to determine which is optimal for creating my distance matrix and later the phylogenetic tree. 
+
+As I reflect on my work throughout this project, there are a couple of crucial things that I'll take away. I had stated previously (assignment 3) that one of my goals in the future was to improve my ability to manipulate data inside R, build up my core data handling skills, and focus less on answering biological questions. With its multiple data sources, formats, and filtering that needed to be done, this project pushed me out of my comfort zone. While I still have a long way to go, especially in regards to making my code reproducible and more elegant, I'm glad I used this as an opportunity to improve my data handling skills. I noticed a marked increase in my proficiency as a googler; during the many error messages I got throughout this project, I found that my ability to search StackOverflow, GitHub, documentation, etc. and find the information I needed had markedly improved compared to assignment 1. 
+
+#Acknowledgments 
+I've included online resources (Stackoverflow posts, github) as well as the references for various packages as they were used in the script so I won't repeat them here. 
+
+When my group was doing assignment three Chor showed me how to parse out Species Name and Genus Name from the Title's of NCBI data entries, which I used again for this assignment. Thanks Chor!
+
+Also thank you to Sally and Jacqueline for providing and awesome class experience, I had a lot of fun!
+
+#References 
+
+Almeida FC, Giannini NP, DeSalle R, Simmons NB. 2011. Evolutionary relationships of the old world fruit bats (Chiroptera, Pteropodidae): another star phylogeny? BMC Evol Biol. 11:281. doi:10.1186/1471-2148-11-281. http://dx.doi.org/10.1186/1471-2148-11-281.
+
+
+Corbet GB, Hill JE. 1992. The mammals of the Indo-Malayan region. Oxford, UK: Oxford University Press.
+
+
+Huang C-H, Sun R, Hu Y, Zeng L, Zhang N, Cai L, Zhang Q, Koch MA, Al-Shehbaz I, Edger PP, et al. 2016. Resolution of Brassicaceae phylogeny using nuclear genes uncovers nested radiations and supports convergent morphological evolution. Mol Biol Evol. 33(2):394–412. doi:10.1093/molbev/msv226. http://dx.doi.org/10.1093/molbev/msv226.
+
+
+van Oosterzee P. 1997. Where worlds collide: Wallace line. Ithaca, NY: Cornell University Press.
+
+
+Tsang SM, Wiantoro S, Veluz MJ, Sugita N, Nguyen Y-L, Simmons NB, Lohman DJ. 2020. Dispersal out of Wallacea spurs diversification of Pteropus flying foxes, the world’s largest bats (Mammalia: Chiroptera). J Biogeogr. 47(2):527–537. doi:10.1111/jbi.13750. http://dx.doi.org/10.1111/jbi.13750.
+
+
+Yahr R, Schoch CL, Dentinger BTM. 2016. Scaling up discovery of hidden diversity in fungi: impacts of barcoding approaches. Philos Trans R Soc Lond B Biol Sci. 371(1702):20150336. doi:10.1098/rstb.2015.0336. http://dx.doi.org/10.1098/rstb.2015.0336.
+
+
